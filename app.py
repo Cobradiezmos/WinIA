@@ -1,63 +1,68 @@
-import json
-import subprocess
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Football Value Betting Model", layout="wide")
+st.set_page_config(
+    page_title="WinIA - Value Betting Dashboard", page_icon="⚽", layout="wide"
+)
 
-st.title("⚽ Football Value Betting Dashboard")
+st.title("⚽ WinIA - Sistema Integral de Value Betting")
+st.markdown(
+    "Panel de control con oportunidades de valor multicriterio (1X2, Over/Under, BTTS y Hándicap)."
+)
 
-# Barra lateral
-st.sidebar.header("⚙️ Configuración")
-bankroll = st.sidebar.number_input("Banca Total ($)", value=1000.0, step=100.0)
-kelly_frac = st.sidebar.slider("Fracción de Kelly", 0.05, 1.0, 0.25, step=0.05)
-min_edge = st.sidebar.slider("Edge Mínimo", 0.0, 0.10, 0.025, step=0.005)
-min_ev = st.sidebar.slider("EV Mínimo", 0.0, 0.10, 0.02, step=0.005)
+# Cargar candidatos de valor generados por el pipeline
+candidates_path = Path("data/processed/value_candidates.csv")
 
-if st.sidebar.button("🔄 Actualizar y Re-entrenar"):
-    with st.spinner("Ejecutando pipeline..."):
-        st.success("¡Modelo actualizado!")
+if not candidates_path.exists():
+  st.warning(
+      "⚠️ No se encontró el archivo `value_candidates.csv`. Ejecuta la"
+      " actualización diaria primero."
+  )
 else:
-    pass
-# Pestañas principales
-tab1, tab2 = st.tabs(["🎯 Oportunidades de Valor", "📈 Backtest Historico"])
+  df_val = pd.read_csv(candidates_path)
 
-with tab1:
-    st.header("Candidatos de Valor")
-    val_file = Path("data/processed/value_candidates.csv")
-    if val_file.exists():
-        df_val = pd.read_csv(val_file)
-        filtered = df_val[(df_val['edge'] >= min_edge) & (df_val['ev'] >= min_ev)].copy()
-        if not filtered.empty:
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Partidos Encontrados", len(filtered))
-            col2.metric("EV Medio", f"{filtered['ev'].mean()*100:.2f}%")
-            col3.metric("Riesgo Total", f"${filtered['stake'].sum():.2f}")
-            st.dataframe(filtered, use_container_width=True)
-        else:
-            st.info("No hay oportunidades con los filtros actuales.")
-    else:
-        st.warning("No se encontraron predicciones. Haz clic en 'Actualizar y Re-entrenar'.")
+  if df_val.empty:
+    st.info(
+        "ℹ️ No hay oportunidades de valor que cumplan los criterios actuales"
+        " en este momento."
+    )
+  else:
+    st.subheader(
+        f"🔥 Oportunidades de Valor Detectadas ({len(df_val)} apuestas)"
+    )
 
-with tab2:
-    st.header("Resultados de Backtest")
-    met_file = Path("data/processed/backtest/metrics.json")
-    bets_file = Path("data/processed/backtest/bets.csv")
-    if met_file.exists() and bets_file.exists():
-        with open(met_file) as f:
-            m = json.load(f)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("ROI", f"{m.get('roi', 0)*100:.2f}%")
-        c2.metric("Beneficio", f"${m.get('profit', 0):.2f}")
-        c3.metric("Aciertos", f"{m.get('win_rate', 0)*100:.1f}%")
-        c4.metric("Max Drawdown", f"${m.get('max_drawdown', 0):.2f}")
-        
-        df_b = pd.read_csv(bets_file)
-        if 'cum_profit' in df_b.columns:
-            st.line_chart(df_b.set_index('date')['cum_profit'])
-# Partidos pendientes de jugar
-df_futuros = df[df["result"].isna() | (df["result"] == "")].sort_values("date")
+    # Filtros laterales o superiores opcionales
+    min_edge_filter = st.slider(
+        "Filtrar por Edge mínimo (%)", 0.0, 0.15, 0.025, 0.005
+    )
+    df_filtered = df_val[df_val["edge"] >= min_edge_filter]
 
-st.subheader("Próximas apuestas de valor (Partidos no jugados)")
-st.dataframe(df_futuros)
+    # Mostrar tabla interactiva
+    st.dataframe(
+        df_filtered.sort_values(by="edge", ascending=False), use_container_width=True
+    )
+
+# Cargar también datos generales si se desea mostrar partidos futuros
+predictions_path = Path("data/processed/predictions_ensemble.csv")
+if not predictions_path.exists():
+  predictions_path = Path("data/processed/predictions_elo_poisson.csv")
+
+if predictions_path.exists():
+  df_pred = pd.read_csv(predictions_path)
+  st.subheader("📅 Próximos Partidos y Predicciones del Modelo")
+
+  # Comprobación segura de columnas para evitar NameErrors o KeyErrors
+  if "result" in df_pred.columns:
+    df_futuros = df_pred[
+        df_pred["result"].isna() | (df_pred["result"] == "")
+    ]
+  elif "home_goals" in df_pred.columns:
+    df_futuros = df_pred[df_pred["home_goals"].isna()]
+  else:
+    df_futuros = df_pred.tail(20)  # Muestra los últimos si no hay filtro claro
+
+  if not df_futuros.empty and "date" in df_futuros.columns:
+    df_futuros = df_futuros.sort_values("date")
+
+  st.dataframe(df_futuros, use_container_width=True)
