@@ -28,10 +28,10 @@ def poisson_all_markets(lam_h, lam_a, max_goals=10):
 
     # Mercado 1X2
     ph = float(np.tril(probs, -1).sum())
-    pd = float(np.trace(probs))
+    pd_prob = float(np.trace(probs))
     pa = float(np.triu(probs, 1).sum())
-    z = ph + pd + pa
-    ph, pd, pa = ph / z, pd / z, pa / z
+    z = ph + pd_prob + pa
+    ph, pd_prob, pa = ph / z, pd_prob / z, pa / z
 
     # Mercado Over / Under 2.5
     p_under25 = float(
@@ -54,7 +54,7 @@ def poisson_all_markets(lam_h, lam_a, max_goals=10):
 
     return (
         ph,
-        pd,
+        pd_prob,
         pa,
         p_over25,
         p_under25,
@@ -73,34 +73,42 @@ def compute_poisson_features(df, shrink=0.25):
     rows = []
 
     for _, r in df.iterrows():
+        away_ga = r.get("away_ga_5")
+        home_ga = r.get("home_ga_5")
+
         h_attack = (
-            r.home_gf_5 + (r.away_ga_5 if pd.notna(r.away_ga_5) else league_mean)
+            r.home_gf_5
+            + (
+                away_ga
+                if (away_ga is not None and not np.isnan(away_ga))
+                else league_mean
+            )
         ) / 2
         a_attack = (
-            r.away_gf_5 + (r.home_ga_5 if pd.notna(r.home_ga_5) else league_mean)
+            r.away_gf_5
+            + (
+                home_ga
+                if (home_ga is not None and not np.isnan(home_ga))
+                else league_mean
+            )
         ) / 2
 
         h_attack = (1 - shrink) * h_attack + shrink * league_mean
         a_attack = (1 - shrink) * a_attack + shrink * league_mean
 
-        elo_factor = np.clip(
-            (
-                r.elo_diff_pre / 400
-                if "elo_diff_pre" in r
-                else (r.get("elo_home_pre", 1500) - r.get("elo_away_pre", 1500))
-                / 400
-            ),
-            -0.75,
-            0.75,
-        )
+        elo_diff = r.get("elo_diff_pre")
+        if elo_diff is None or np.isnan(elo_diff):
+            elo_diff = r.get("elo_home_pre", 1500) - r.get("elo_away_pre", 1500)
+
+        elo_factor = np.clip(elo_diff / 400, -0.75, 0.75)
 
         lam_h = max(0.05, h_attack * math.exp(0.18 * elo_factor))
         lam_a = max(0.05, a_attack * math.exp(-0.18 * elo_factor))
 
         (
-            ph,
-            pd,
-            pa,
+            p_h,
+            p_d,
+            p_a,
             p_over25,
             p_under25,
             p_btts_yes,
@@ -112,9 +120,9 @@ def compute_poisson_features(df, shrink=0.25):
         rows.append([
             lam_h,
             lam_a,
-            ph,
-            pd,
-            pa,
+            p_h,
+            p_d,
+            p_a,
             p_over25,
             p_under25,
             p_btts_yes,
@@ -165,7 +173,6 @@ def prepare_features(df):
         "p_poisson_away",
     ]
 
-    # Filtrar solo las que existen en el DataFrame
     existing_cols = [c for c in feature_cols if c in df.columns]
     X = df[existing_cols].copy()
     X = X.fillna(X.median())
@@ -190,7 +197,6 @@ def optimize_weights(P_list, y_true):
         weights = weights / np.sum(weights)
         P_ens = sum(w * P for w, P in zip(weights, P_list))
         P_ens = np.clip(P_ens, 1e-5, 1 - 1e-5)
-        # Calculate Log Loss
         one_hot = np.eye(3)[y_true]
         return -np.mean(np.sum(one_hot * np.log(P_ens), axis=1))
 
@@ -250,13 +256,13 @@ def main():
 
     print(f"Entrenando modelos sobre {len(X_tr)} partidos pasados...")
 
-    # A. Modelo Gradient Boosting (HistGradientBoosting)
+    # A. Modelo Gradient Boosting
     gb = HistGradientBoostingClassifier(
         max_iter=100, learning_rate=0.05, max_leaf_nodes=15, random_state=42
     )
     gb.fit(X_tr, y_tr)
 
-    # B. Modelo Regresión Logística Multinomial
+    # B. Modelo Regresión Logística
     lr = LogisticRegression(max_iter=500, C=0.1, random_state=42)
     lr.fit(X_tr, y_tr)
 
@@ -286,18 +292,18 @@ def main():
         f"Pesos optimizados del Ensemble -> GB: {weights[0]:.3f}, LR: {weights[1]:.3f}, Poisson: {weights[2]:.3f}, Elo: {weights[3]:.3f}"
     )
 
-    # Re-entrenar modelos con el 100% de datos históricos disponibles
+    # Re-entrenar modelos con el histórico completo
     print("Re-entrenando modelos con el histórico completo...")
     gb.fit(X_train_full, y_train_full)
     lr.fit(X_train_full, y_train_full)
 
-    # Guardar modelos entrenados en disco
+    # Guardar modelos entrenados
     models_dir = Path(args.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(gb, models_dir / "gb_model.joblib")
     joblib.dump(lr, models_dir / "lr_model.joblib")
 
-    # 3. GENERAR PREDICCIONES FINALES PARA TODO EL DATASET (HISTÓRICO + FUTUROS)
+    # 3. GENERAR PREDICCIONES FINALES PARA TODO EL DATASET
     print("Generando predicciones de Ensemble para todos los partidos...")
     X_all, _ = prepare_features(df)
 
@@ -328,7 +334,7 @@ def main():
     df["p_model_draw"] = P_ensemble[:, 1]
     df["p_model_away"] = P_ensemble[:, 2]
 
-    # Normalizar y acotar probabilidades por seguridad
+    # Normalizar y acotar probabilidades
     cols_prob = [
         "p_model_home",
         "p_model_draw",
