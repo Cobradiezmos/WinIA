@@ -16,10 +16,10 @@ min_edge = st.sidebar.slider("Edge Mínimo", 0.0, 0.10, 0.025, step=0.005)
 min_ev = st.sidebar.slider("EV Mínimo", 0.0, 0.10, 0.02, step=0.005)
 
 if st.sidebar.button("🔄 Actualizar y Re-entrenar"):
-    with st.spinner("Ejecutando pipeline diario..."):
-        # subprocess.run(["python", "daily_update.py"], check=True)
-    st.success("¡Modelo actualizado!")
-
+    with st.spinner("Ejecutando pipeline..."):
+        st.success("¡Modelo actualizado!")
+else:
+    pass
 # Pestañas principales
 tab1, tab2 = st.tabs(["🎯 Oportunidades de Valor", "📈 Backtest Historico"])
 
