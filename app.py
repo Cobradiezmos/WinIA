@@ -40,6 +40,10 @@ with tab1:
     else:
       st.info("No hay oportunidades de valor con los filtros actuales.")
   else:
+    st.warning("No se encontró el archivo de candidatos de valor.")
+
+with tab2:
+  st.subheader("Próximos Partidos y Predicciones")
   data_file = Path("data/processed/predictions_ensemble.csv")
   if not data_file.exists():
     data_file = Path("data/processed/predictions_elo_poisson.csv")
