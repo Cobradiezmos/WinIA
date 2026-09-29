@@ -1,30 +1,19 @@
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-import subprocess
 
 st.set_page_config(
     page_title="WinIA - Value Betting Dashboard", page_icon="⚽", layout="wide"
 )
 
 # ==========================================
-# BARRA LATERAL (SIDEBAR) - CONTROLES Y BANK
+# BARRA LATERAL (SIDEBAR) - GESTIÓN DE BANK
 # ==========================================
 st.sidebar.title("⚙️ Panel de Control")
-
-import sys  # Asegúrate de importar sys si no lo tienes arriba
-
-# Botón para forzar actualización diaria de datos
-if st.sidebar.button("🔄 Ejecutar Actualización Diaria"):
-  with st.spinner("Actualizando datos y ejecutando modelos..."):
-    try:
-      # Usar sys.executable fuerza a usar exactamente el mismo entorno de Python de Streamlit
-      result = subprocess.run(
-          [sys.executable, "daily_update.py"], capture_output=True, text=True, check=True
-      )
-      st.sidebar.success("¡Actualización completada con éxito!")
-    except subprocess.CalledProcessError as e:
-      st.sidebar.error(f"Error en la actualización: {e.stderr}")
+st.sidebar.markdown(
+    "💡 *Para actualizar datos y modelos, ejecuta el flujo en la pestaña Actions"
+    " de GitHub.*"
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Gestión de Bankroll")
@@ -49,7 +38,7 @@ st.markdown(
     " modelos y optimización de capital."
 )
 
-# Cargar archivos de datos
+# Cargar archivos de datos procesados
 candidates_path = Path("data/processed/value_candidates.csv")
 predictions_path = Path("data/processed/predictions_ensemble.csv")
 if not predictions_path.exists():
@@ -65,19 +54,16 @@ with tab1:
   if candidates_path.exists():
     df_val = pd.read_csv(candidates_path)
     if not df_val.empty:
-      # Filtros interactivos
       min_edge = st.slider(
           "Edge mínimo (%)", 0.0, 0.15, 0.025, 0.005, key="edge_slider"
       )
       df_filtered = df_val[df_val["edge"] >= min_edge].copy()
 
-      # Calcular stake monetario real basado en el bankroll y kelly configurados en la sidebar
       if "stake" in df_filtered.columns:
         df_filtered["stake_ (€)"] = (
             df_filtered["stake"] * bankroll_inicial
         ).round(2)
 
-      # Métricas rápidas de resumen
       col1, col2, col3 = st.columns(3)
       col1.metric("Apuestas Encontradas", len(df_filtered))
       col2.metric(
@@ -97,7 +83,7 @@ with tab1:
   else:
     st.warning(
         "⚠️ No se encontró el archivo de candidatos de valor. Ejecuta la"
-        " actualización diaria."
+        " actualización en GitHub Actions."
     )
 
 with tab2:
@@ -105,7 +91,6 @@ with tab2:
   if predictions_path.exists():
     df = pd.read_csv(predictions_path)
 
-    # Arreglo seguro del error de la columna result
     if "result" in df.columns:
       df_futuros = df[df["result"].isna() | (df["result"] == "")]
     elif "home_goals" in df.columns:
