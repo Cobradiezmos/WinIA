@@ -56,3 +56,8 @@ with tab2:
         df_b = pd.read_csv(bets_file)
         if 'cum_profit' in df_b.columns:
             st.line_chart(df_b.set_index('date')['cum_profit'])
+# Partidos pendientes de jugar
+df_futuros = df[df["result"].isna() | (df["result"] == "")].sort_values("date")
+
+st.subheader("Próximas apuestas de valor (Partidos no jugados)")
+st.dataframe(df_futuros)
