@@ -12,12 +12,15 @@ st.set_page_config(
 # ==========================================
 st.sidebar.title("⚙️ Panel de Control")
 
+import sys  # Asegúrate de importar sys si no lo tienes arriba
+
 # Botón para forzar actualización diaria de datos
 if st.sidebar.button("🔄 Ejecutar Actualización Diaria"):
   with st.spinner("Actualizando datos y ejecutando modelos..."):
     try:
+      # Usar sys.executable fuerza a usar exactamente el mismo entorno de Python de Streamlit
       result = subprocess.run(
-          ["python", "daily_update.py"], capture_output=True, text=True, check=True
+          [sys.executable, "daily_update.py"], capture_output=True, text=True, check=True
       )
       st.sidebar.success("¡Actualización completada con éxito!")
     except subprocess.CalledProcessError as e:
