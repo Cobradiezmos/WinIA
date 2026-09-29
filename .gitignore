@@ -1,0 +1,10 @@
+# Excluir archivos de datos pesados generados por el pipeline
+data/raw/
+data/processed/asof_features.csv
+data/processed/all_matches.csv
+data/processed/predictions_ensemble.csv
+data/processed/predictions_*.csv
+
+# Permitir unicamente la salida final de valor
+!data/processed/value_candidates.csv
+!data/processed/.gitkeep
