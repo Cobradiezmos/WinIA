@@ -15,7 +15,7 @@ def main():
       if not a.no_download:
         end=datetime.now().year if datetime.now().month>=7 else datetime.now().year-1; start=max(a.start,end-a.refresh_seasons+1)
         run([py,str(root/'download_all.py'),'--start',str(a.start),'--end',str(end),'--refresh-current'] + (['--leagues',a.leagues] if a.leagues else []))
-      run([py,str(root/'combine.py')]); run([py,str(root/'build_asof.py')]); run([py,str(root/'model_pipeline.py')]); run([py,str(root/'value_scan.py'),'--min-edge',str(a.min_edge),'--min-ev',str(a.min_ev)])
+      run([py,str(root/'combine.py')]); run([py,str(root/'build_asof.py')]); run([py,str(root/'model_elo_poisson.py')]); run([py,str(root/'value_scan.py'),'--min-edge',str(a.min_edge),'--min-ev',str(a.min_ev)])
       pred=pd.read_csv(root/'data/processed/predictions_ensemble.csv'); vals=pd.read_csv(root/'data/processed/value_candidates.csv')
       log.update({'finished_at':datetime.now(timezone.utc).isoformat(),'status':'ok','matches':int(len(pred)),'completed':int(pred.home_goals.notna().sum()),'upcoming':int(pred.home_goals.isna().sum()),'value_candidates':int(len(vals))})
     except Exception as e:
