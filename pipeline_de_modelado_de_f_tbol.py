@@ -1,268 +1,355 @@
 import argparse
-import json
 import math
-import warnings
 from pathlib import Path
-
+import warnings
 import joblib
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize, minimize_scalar
-from scipy.special import softmax
+from scipy.optimize import minimize
 from scipy.stats import poisson
-from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression, PoissonRegressor
-from sklearn.metrics import brier_score_loss, log_loss
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LogisticRegression
 
-from config import FEATURES, MIN_MATCHES, MODELS, SEED
-
-warnings.filterwarnings('ignore')
-
-TARGETS = ['H', 'D', 'A']
+warnings.filterwarnings("ignore")
 
 
-def market_probs(df: pd.DataFrame) -> np.ndarray:
-    """Calcula probabilidades implícitas del mercado priorizando Pinnacle, Bet365 o Promedios."""
-    for trip in [('PSH', 'PSD', 'PSA'), ('B365H', 'B365D', 'B365A'), ('AvgH', 'AvgD', 'AvgA')]:
-        if all(c in df.columns for c in trip):
-            odds = df[list(trip)].apply(pd.to_numeric, errors='coerce').replace([np.inf, -np.inf], np.nan)
-            inv = 1.0 / odds.where(odds > 1)
-            sum_inv = inv.sum(axis=1)
-            return inv.div(sum_inv, axis=0).fillna(1/3).to_numpy()
-    return np.full((len(df), 3), 1/3)
+# ==========================================
+# 1. CÁLCULOS POISSON Y MULTIMERCADO
+# ==========================================
+def poisson_all_markets(lam_h, lam_a, max_goals=10):
+    """Calcula la matriz de probabilidad de goles y deriva probabilidades
 
-
-def make_poisson_probs_vectorized(lh: np.ndarray, la: np.ndarray, rho: float = -0.05, max_goals: int = 10) -> np.ndarray:
+    para 1X2, Over/Under 2.5, BTTS (Ambos marcan) y AH0 (DNB).
     """
-    Calcula probabilidades 1X2 usando Poisson bivariado con ajuste Dixon-Coles vectorizado.
-    """
-    gh = np.arange(max_goals + 1)
-    ga = np.arange(max_goals + 1)
-    
-    # PMFs individuales: dimensiones (N, max_goals+1, 1) y (N, 1, max_goals+1)
-    pmf_h = poisson.pmf(gh, lh[:, None, None])
-    pmf_a = poisson.pmf(ga, la[:, None, None]).transpose(0, 2, 1)
-    
-    # Matriz bivariada independiente (N, max_goals+1, max_goals+1)
-    P = pmf_h * pmf_a
-    
-    # Corrección Dixon-Coles para marcadores bajos
-    tau_00 = np.maximum(0.01, 1 - lh * la * rho)
-    tau_01 = np.maximum(0.01, 1 + lh * rho)
-    tau_10 = np.maximum(0.01, 1 + la * rho)
-    tau_11 = np.maximum(0.01, 1 - rho)
-    
-    P[:, 0, 0] *= tau_00
-    P[:, 0, 1] *= tau_01
-    P[:, 1, 0] *= tau_10
-    P[:, 1, 1] *= tau_11
-    
-    # Normalizar suma
-    sums = P.sum(axis=(1, 2), keepdims=True)
-    P /= np.maximum(sums, 1e-12)
-    
-    # Extraer probabilidades 1X2
-    p_home = np.tril(P, -1).sum(axis=(1, 2))
-    p_draw = np.trace(P, axis1=1, axis2=2)
-    p_away = np.triu(P, 1).sum(axis=(1, 2))
-    
-    probs = np.column_stack([p_home, p_draw, p_away])
-    return probs / probs.sum(axis=1, keepdims=True)
+    probs = np.outer(
+        poisson.pmf(np.arange(max_goals + 1), lam_h),
+        poisson.pmf(np.arange(max_goals + 1), lam_a),
+    )
+
+    # Mercado 1X2
+    ph = float(np.tril(probs, -1).sum())
+    pd = float(np.trace(probs))
+    pa = float(np.triu(probs, 1).sum())
+    z = ph + pd + pa
+    ph, pd, pa = ph / z, pd / z, pa / z
+
+    # Mercado Over / Under 2.5
+    p_under25 = float(
+        sum(
+            probs[i, j]
+            for i in range(max_goals + 1)
+            for j in range(max_goals + 1)
+            if i + j <= 2
+        )
+    )
+    p_over25 = 1.0 - p_under25
+
+    # Mercado BTTS (Ambos marcan)
+    p_btts_no = float(np.sum(probs[0, :]) + np.sum(probs[:, 0]) - probs[0, 0])
+    p_btts_yes = 1.0 - p_btts_no
+
+    # Mercado Handicap Asiatico 0 / DNB
+    p_ah0_home = ph / (ph + pa) if (ph + pa) > 0 else 0.5
+    p_ah0_away = pa / (ph + pa) if (ph + pa) > 0 else 0.5
+
+    return (
+        ph,
+        pd,
+        pa,
+        p_over25,
+        p_under25,
+        p_btts_yes,
+        p_btts_no,
+        p_ah0_home,
+        p_ah0_away,
+    )
 
 
-def fit_poisson_goals(train: pd.DataFrame):
-    num = [c for c in FEATURES if c in train.columns]
-    cats = ['league', 'home_team', 'away_team']
-    
-    pre_h = ColumnTransformer([
-        ('cat', OneHotEncoder(handle_unknown='ignore'), cats),
-        ('num', Pipeline([('imp', SimpleImputer(strategy='median')), ('sc', StandardScaler())]), num)
-    ], remainder='drop')
-    
-    pre_a = ColumnTransformer([
-        ('cat', OneHotEncoder(handle_unknown='ignore'), cats),
-        ('num', Pipeline([('imp', SimpleImputer(strategy='median')), ('sc', StandardScaler())]), num)
-    ], remainder='drop')
-    
-    mh = Pipeline([('pre', pre_h), ('reg', PoissonRegressor(alpha=0.35, max_iter=500))])
-    ma = Pipeline([('pre', pre_a), ('reg', PoissonRegressor(alpha=0.35, max_iter=500))])
-    
-    X = train[cats + num]
-    mh.fit(X, train.home_goals.clip(lower=0))
-    ma.fit(X, train.away_goals.clip(lower=0))
-    return mh, ma
+def compute_poisson_features(df, shrink=0.25):
+    """Genera las probabilidades Poisson para todos los partidos del dataset."""
+    league_mean = (
+        df[["home_gf_5", "away_gf_5", "home_ga_5", "away_ga_5"]].stack().mean()
+    )
+    rows = []
 
+    for _, r in df.iterrows():
+        h_attack = (
+            r.home_gf_5 + (r.away_ga_5 if pd.notna(r.away_ga_5) else league_mean)
+        ) / 2
+        a_attack = (
+            r.away_gf_5 + (r.home_ga_5 if pd.notna(r.home_ga_5) else league_mean)
+        ) / 2
 
-def predict_lambdas(models, df: pd.DataFrame):
-    mh, ma = models
-    X = df[['league', 'home_team', 'away_team'] + [c for c in FEATURES if c in df.columns]]
-    return np.clip(mh.predict(X), 0.05, 6.0), np.clip(ma.predict(X), 0.05, 6.0)
+        h_attack = (1 - shrink) * h_attack + shrink * league_mean
+        a_attack = (1 - shrink) * a_attack + shrink * league_mean
 
+        elo_factor = np.clip(
+            (
+                r.elo_diff_pre / 400
+                if "elo_diff_pre" in r
+                else (r.get("elo_home_pre", 1500) - r.get("elo_away_pre", 1500))
+                / 400
+            ),
+            -0.75,
+            0.75,
+        )
 
-def build_classifier(train: pd.DataFrame):
-    cols = [c for c in FEATURES if c in train.columns]
-    X = train[cols].replace([np.inf, -np.inf], np.nan)
-    y = train.result
-    
-    pipe = Pipeline([
-        ('imp', SimpleImputer(strategy='median', add_indicator=True)),
-        ('model', HistGradientBoostingClassifier(
-            max_iter=250, learning_rate=0.035, max_leaf_nodes=15, 
-            l2_regularization=2.0, random_state=SEED
-        ))
-    ])
-    pipe.fit(X, y)
-    return pipe, cols
+        lam_h = max(0.05, h_attack * math.exp(0.18 * elo_factor))
+        lam_a = max(0.05, a_attack * math.exp(-0.18 * elo_factor))
 
+        (
+            ph,
+            pd,
+            pa,
+            p_over25,
+            p_under25,
+            p_btts_yes,
+            p_btts_no,
+            p_ah0_home,
+            p_ah0_away,
+        ) = poisson_all_markets(lam_h, lam_a)
 
-def build_logistic(train: pd.DataFrame):
-    cols = [c for c in FEATURES if c in train.columns]
-    pipe = Pipeline([
-        ('imp', SimpleImputer(strategy='median', add_indicator=True)),
-        ('sc', StandardScaler()),
-        ('model', LogisticRegression(max_iter=2000, C=0.4, random_state=SEED))
-    ])
-    pipe.fit(train[cols], train.result)
-    return pipe, cols
-
-
-def normalize_probs(p: np.ndarray) -> np.ndarray:
-    p = np.clip(np.asarray(p, float), 1e-8, 1.0)
-    return p / p.sum(axis=1, keepdims=True)
-
-
-def align_classifier_probs(pipe, df_cols, targets=TARGETS) -> np.ndarray:
-    q = pipe.predict_proba(df_cols)
-    out = np.zeros((len(df_cols), 3))
-    for j, c in enumerate(pipe.classes_):
-        if c in targets:
-            out[:, targets.index(c)] = q[:, j]
-    return normalize_probs(out)
-
-
-def optimize_weights(probs_list, y):
-    Y = np.array([{'H': 0, 'D': 1, 'A': 2}[v] for v in y])
-    k = len(probs_list)
-    
-    def obj(z):
-        w = softmax(z)
-        p = sum(w[i] * probs_list[i] for i in range(k))
-        return log_loss(Y, p, labels=[0, 1, 2])
-        
-    res = minimize(obj, np.zeros(k), method='BFGS')
-    return softmax(res.x), res.fun
-
-
-def fit_temperature(p, y):
-    Y = np.array([{'H': 0, 'D': 1, 'A': 2}[v] for v in y])
-    logits = np.log(np.clip(p, 1e-8, 1.0))
-    
-    def loss(logt):
-        return log_loss(Y, softmax(logits / np.exp(logt), axis=1), labels=[0, 1, 2])
-        
-    r = minimize_scalar(loss, bounds=(-2, 2), method='bounded')
-    return float(np.exp(r.x))
-
-
-def evaluate(p, y):
-    Y = np.array([{'H': 0, 'D': 1, 'A': 2}[v] for v in y])
-    return {
-        'logloss': float(log_loss(Y, p, labels=[0, 1, 2])),
-        'brier_mean': float(np.mean([brier_score_loss((Y == i).astype(int), p[:, i]) for i in range(3)])),
-        'accuracy': float((p.argmax(1) == Y).mean())
-    }
-
-
-def train_and_predict(df: pd.DataFrame):
-    done = df.dropna(subset=['home_goals', 'away_goals', 'result']).copy()
-    done = done[(done.home_matches_before >= MIN_MATCHES) & (done.away_matches_before >= MIN_MATCHES)]
-    done = done.sort_values(['date', 'match_id'])
-    
-    if len(done) < 300:
-        raise ValueError('Se necesitan al menos 300 partidos completados con suficiente historial.')
-        
-    cut = int(len(done) * 0.80)
-    train = done.iloc[:cut]
-    cal = done.iloc[cut:]
-    
-    pois = fit_poisson_goals(train)
-    gb, gbcols = build_classifier(train)
-    lr, lcols = build_logistic(train)
-    
-    def get_raw_predictions(d):
-        lh, la = predict_lambdas(pois, d)
-        pp = make_poisson_probs_vectorized(lh, la)
-        pg = align_classifier_probs(gb, d[gbcols])
-        pl = align_classifier_probs(lr, d[lcols])
-        pm = market_probs(d)
-        
-        pe = np.column_stack([
-            d.elo_prob_home.values, 
-            (1 - d.elo_prob_home.values) * 0.28, 
-            (1 - d.elo_prob_home.values) * 0.72
+        rows.append([
+            lam_h,
+            lam_a,
+            ph,
+            pd,
+            pa,
+            p_over25,
+            p_under25,
+            p_btts_yes,
+            p_btts_no,
+            p_ah0_home,
+            p_ah0_away,
         ])
-        pe = normalize_probs(pe)
-        return [pp, pg, pl, pe, pm], (lh, la)
-        
-    # Calibración
-    plist_cal, _ = get_raw_predictions(cal)
-    w, _ = optimize_weights(plist_cal, cal.result.values)
-    
-    pcal = sum(w[i] * plist_cal[i] for i in range(len(w)))
-    temp = fit_temperature(pcal, cal.result.values)
-    pcal = softmax(np.log(np.clip(pcal, 1e-8, 1.0)) / temp, axis=1)
-    
-    metrics = evaluate(pcal, cal.result.values)
-    
-    # Predicción final sobre todo el dataset
-    allrows = df.copy()
-    plist_all, lams = get_raw_predictions(allrows)
-    p_all = sum(w[i] * plist_all[i] for i in range(len(w)))
-    p_all = softmax(np.log(np.clip(p_all, 1e-8, 1.0)) / temp, axis=1)
-    
-    out = allrows.copy()
-    out['lambda_home'], out['lambda_away'] = lams
-    out[['p_model_home', 'p_model_draw', 'p_model_away']] = p_all
-    out['model_entropy'] = -(p_all * np.log(np.clip(p_all, 1e-12, 1.0))).sum(axis=1)
-    out['market_home'], out['market_draw'], out['market_away'] = market_probs(out).T
-    
-    meta = {
-        'weights': w.tolist(),
-        'temperature': temp,
-        'calibration_metrics': metrics,
-        'train_end': str(train.date.max()),
-        'calibration_start': str(cal.date.min()),
-        'n_train': len(train),
-        'n_calibration': len(cal)
-    }
-    
-    MODELS.mkdir(exist_ok=True)
-    joblib.dump({
-        'poisson': pois, 'gb': gb, 'gbcols': gbcols, 
-        'lr': lr, 'lcols': lcols, 'weights': w, 'temperature': temp
-    }, MODELS / 'ensemble.joblib')
-    
-    (MODELS / 'model_metadata.json').write_text(json.dumps(meta, indent=2, default=str), encoding='utf-8')
-    return out, meta
+
+    cols = [
+        "lambda_home",
+        "lambda_away",
+        "p_poisson_home",
+        "p_poisson_draw",
+        "p_poisson_away",
+        "p_over25",
+        "p_under25",
+        "p_btts_yes",
+        "p_btts_no",
+        "p_ah0_home",
+        "p_ah0_away",
+    ]
+    res = pd.DataFrame(rows, columns=cols, index=df.index)
+    return res
 
 
+# ==========================================
+# 2. ENSEMBLE Y CALIBRACIÓN DE MODELOS
+# ==========================================
+def prepare_features(df):
+    """Prepara la matriz X de variables predictoras para ML."""
+    feature_cols = [
+        "elo_diff_pre",
+        "elo_prob_home",
+        "home_gf_5",
+        "home_ga_5",
+        "away_gf_5",
+        "away_ga_5",
+        "home_ppg_5",
+        "away_ppg_5",
+        "form_diff_5",
+        "goal_diff_form_5",
+        "rest_diff",
+        "experience_diff",
+        "lambda_home",
+        "lambda_away",
+        "p_poisson_home",
+        "p_poisson_draw",
+        "p_poisson_away",
+    ]
+
+    # Filtrar solo las que existen en el DataFrame
+    existing_cols = [c for c in feature_cols if c in df.columns]
+    X = df[existing_cols].copy()
+    X = X.fillna(X.median())
+    return X, existing_cols
+
+
+def map_target(result):
+    if result == "H":
+        return 0
+    if result == "D":
+        return 1
+    if result == "A":
+        return 2
+    return np.nan
+
+
+def optimize_weights(P_list, y_true):
+    """Optimización de ponderación del Ensemble minimizando Log Loss."""
+    n_models = len(P_list)
+
+    def loss(weights):
+        weights = weights / np.sum(weights)
+        P_ens = sum(w * P for w, P in zip(weights, P_list))
+        P_ens = np.clip(P_ens, 1e-5, 1 - 1e-5)
+        # Calculate Log Loss
+        one_hot = np.eye(3)[y_true]
+        return -np.mean(np.sum(one_hot * np.log(P_ens), axis=1))
+
+    init_weights = np.ones(n_models) / n_models
+    bounds = [(0, 1)] * n_models
+    res = minimize(loss, init_weights, bounds=bounds, method="SLSQP")
+    final_w = res.x / np.sum(res.x)
+    return final_w
+
+
+def calibrate_probabilities(P, T=1.0):
+    """Calibración por temperatura de matriz de probabilidades."""
+    P_cal = np.power(P, 1.0 / T)
+    P_cal /= P_cal.sum(axis=1, keepdims=True)
+    return P_cal
+
+
+# ==========================================
+# 3. PIPELINE PRINCIPAL
+# ==========================================
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--input', default='data/processed/asof_features.csv')
-    ap.add_argument('--output', default='data/processed/predictions_ensemble.csv')
-    args = ap.parse_args()
-    
-    df = pd.read_csv(args.input, parse_dates=['date'])
-    out, meta = train_and_predict(df)
-    out.to_csv(args.output, index=False)
-    
-    print(json.dumps(meta, indent=2))
-    print(out[['date', 'league', 'home_team', 'away_team', 'p_model_home', 'p_model_draw', 'p_model_away']].tail(20).to_string(index=False))
+    parser = argparse.ArgumentParser(
+        description="Pipeline de modelado Ensemble WinIA"
+    )
+    parser.add_argument("--input", default="data/processed/asof_features.csv")
+    parser.add_argument(
+        "--output", default="data/processed/predictions_ensemble.csv"
+    )
+    parser.add_argument("--models-dir", default="data/models")
+    args = parser.parse_args()
+
+    print(f"Cargando dataset desde {args.input}...")
+    df = pd.read_csv(args.input)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # 1. Calcular variables Poisson y Multimercado
+    print("Calculando modelos Poisson y métricas multimercado...")
+    df_poisson = compute_poisson_features(df)
+    for c in df_poisson.columns:
+        df[c] = df_poisson[c]
+
+    # 2. Separar datos de entrenamiento (partidos con resultado) y predicción
+    df_train = df[
+        df["result"].notna() & df["result"].isin(["H", "D", "A"])
+    ].copy()
+    df_train["target"] = df_train["result"].map(map_target).astype(int)
+
+    X_train_full, feature_cols = prepare_features(df_train)
+    y_train_full = df_train["target"].values
+
+    # Split temporal para entrenamiento y validación/calibración (80% / 20%)
+    split_idx = int(len(df_train) * 0.8)
+
+    X_tr, y_tr = X_train_full.iloc[:split_idx], y_train_full[:split_idx]
+    X_val, y_val = X_train_full.iloc[split_idx:], y_train_full[split_idx:]
+
+    print(f"Entrenando modelos sobre {len(X_tr)} partidos pasados...")
+
+    # A. Modelo Gradient Boosting (HistGradientBoosting)
+    gb = HistGradientBoostingClassifier(
+        max_iter=100, learning_rate=0.05, max_leaf_nodes=15, random_state=42
+    )
+    gb.fit(X_tr, y_tr)
+
+    # B. Modelo Regresión Logística Multinomial
+    lr = LogisticRegression(max_iter=500, C=0.1, random_state=42)
+    lr.fit(X_tr, y_tr)
+
+    # C. Obtener predicciones en validación para ensamblar
+    P_gb_val = gb.predict_proba(X_val)
+    P_lr_val = lr.predict_proba(X_val)
+    P_poi_val = df_train.iloc[split_idx:][
+        ["p_poisson_home", "p_poisson_draw", "p_poisson_away"]
+    ].values
+
+    # Opciones Elo base
+    if "elo_prob_home" in df_train.columns:
+        p_elo_h = df_train.iloc[split_idx:]["elo_prob_home"].values
+        p_elo_d = np.full_like(p_elo_h, 0.26)
+        p_elo_a = 1.0 - p_elo_h - p_elo_d
+        P_elo_val = np.column_stack([p_elo_h, p_elo_d, p_elo_a])
+        P_elo_val = np.clip(P_elo_val, 0.01, 0.98)
+        P_elo_val /= P_elo_val.sum(axis=1, keepdims=True)
+    else:
+        P_elo_val = P_poi_val
+
+    # Optimizar pesos del Ensemble
+    weights = optimize_weights(
+        [P_gb_val, P_lr_val, P_poi_val, P_elo_val], y_val
+    )
+    print(
+        f"Pesos optimizados del Ensemble -> GB: {weights[0]:.3f}, LR: {weights[1]:.3f}, Poisson: {weights[2]:.3f}, Elo: {weights[3]:.3f}"
+    )
+
+    # Re-entrenar modelos con el 100% de datos históricos disponibles
+    print("Re-entrenando modelos con el histórico completo...")
+    gb.fit(X_train_full, y_train_full)
+    lr.fit(X_train_full, y_train_full)
+
+    # Guardar modelos entrenados en disco
+    models_dir = Path(args.models_dir)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(gb, models_dir / "gb_model.joblib")
+    joblib.dump(lr, models_dir / "lr_model.joblib")
+
+    # 3. GENERAR PREDICCIONES FINALES PARA TODO EL DATASET (HISTÓRICO + FUTUROS)
+    print("Generando predicciones de Ensemble para todos los partidos...")
+    X_all, _ = prepare_features(df)
+
+    P_gb_all = gb.predict_proba(X_all)
+    P_lr_all = lr.predict_proba(X_all)
+    P_poi_all = df[["p_poisson_home", "p_poisson_draw", "p_poisson_away"]].values
+
+    if "elo_prob_home" in df.columns:
+        p_elo_h_all = df["elo_prob_home"].values
+        p_elo_d_all = np.full_like(p_elo_h_all, 0.26)
+        p_elo_a_all = 1.0 - p_elo_h_all - p_elo_d_all
+        P_elo_all = np.column_stack([p_elo_h_all, p_elo_d_all, p_elo_a_all])
+        P_elo_all = np.clip(P_elo_all, 0.01, 0.98)
+        P_elo_all /= P_elo_all.sum(axis=1, keepdims=True)
+    else:
+        P_elo_all = P_poi_all
+
+    # Combinación lineal con los pesos optimizados
+    P_ensemble = (
+        weights[0] * P_gb_all
+        + weights[1] * P_lr_all
+        + weights[2] * P_poi_all
+        + weights[3] * P_elo_all
+    )
+
+    # Asignar probabilidades 1X2 finales del modelo
+    df["p_model_home"] = P_ensemble[:, 0]
+    df["p_model_draw"] = P_ensemble[:, 1]
+    df["p_model_away"] = P_ensemble[:, 2]
+
+    # Normalizar y acotar probabilidades por seguridad
+    cols_prob = [
+        "p_model_home",
+        "p_model_draw",
+        "p_model_away",
+        "p_over25",
+        "p_under25",
+        "p_btts_yes",
+        "p_btts_no",
+        "p_ah0_home",
+        "p_ah0_away",
+    ]
+    for c in cols_prob:
+        df[c] = df[c].clip(0.001, 0.998)
+
+    # Exportar archivo final procesado
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+
+    print(f"✓ Archivo generado exitosamente con {len(df)} filas: {out_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
