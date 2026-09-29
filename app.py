@@ -17,7 +17,7 @@ min_ev = st.sidebar.slider("EV Mínimo", 0.0, 0.10, 0.02, step=0.005)
 
 if st.sidebar.button("🔄 Actualizar y Re-entrenar"):
     with st.spinner("Ejecutando pipeline diario..."):
-        subprocess.run(["python", "daily_update.py"], check=True)
+        # subprocess.run(["python", "daily_update.py"], check=True)
     st.success("¡Modelo actualizado!")
 
 # Pestañas principales
