@@ -28,3 +28,14 @@ def main():
         except Exception as e: log.append([league,season,'error',str(e)])
     pd.DataFrame(log,columns=['league','season','status','info']).to_csv(Path(args.out)/'download_log.csv',index=False)
 if __name__=='__main__': main()
+# Añadir en download_all.py para obtener partidos futuros de los próximos días
+FIXTURES_URL = "https://www.football-data.co.uk/fixtures.csv"
+
+try:
+    r = requests.get(FIXTURES_URL, headers=headers)
+    if r.status_code == 200:
+        with open("data/raw/fixtures.csv", "wb") as f:
+            f.write(r.content)
+        print("Fixtures de próximos partidos descargados correctamente.")
+except Exception as e:
+    print(f"No se pudieron descargar fixtures: {e}")
