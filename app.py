@@ -54,7 +54,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🔄 Sincronización Remota")
 github_token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
 # REEMPLAZA "tu-usuario/tu-repositorio" por tu usuario y repo real de GitHub
-repo_name = "tu-usuario/tu-repositorio"
+repo_name = "Cobradiezmos/WinIA"
 
 if st.sidebar.button("🚀 Actualizar Datos (GitHub)"):
   if not github_token:
