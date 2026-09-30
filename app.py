@@ -8,9 +8,9 @@ st.set_page_config(
 )
 
 
-# Función definitiva para limpiar "fixtures.csv", "fixture", etc.
+# Función radical para eliminar "fixtures.csv" de las celdas
 def limpiar_fixture(df):
-  # Buscar qué columna contiene el nombre de la liga
+  # Buscar si hay alguna columna de liga disponible
   league_col = next(
       (
           c
@@ -27,14 +27,18 @@ def limpiar_fixture(df):
       ),
       None,
   )
-  if league_col:
-    for col in df.columns:
-      if col != league_col:
-        # Convertir a texto y buscar si contiene la palabra "fixture" o "fixtures.csv" (sin importar mayúsculas)
-        serie_limpia = df[col].astype(str).str.lower()
-        mask = serie_limpia.str.contains("fixture", na=False)
-        if mask.any():
+
+  for col in df.columns:
+    if col != league_col:
+      serie_limpia = df[col].astype(str).str.lower()
+      mask = serie_limpia.str.contains("fixtures.csv", na=False)
+      if mask.any():
+        if league_col:
+          # Si tenemos columna de liga, ponemos la liga
           df.loc[mask, col] = df[league_col]
+        else:
+          # Si no hay columna de liga, ponemos un texto limpio genérico
+          df.loc[mask, col] = "Partido de Liga"
   return df
 
 
