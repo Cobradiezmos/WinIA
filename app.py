@@ -88,37 +88,55 @@ with tab1:
     )
 
 with tab2:
-  st.subheader(
-      "Próximos Partidos y Partidos Recientes (Últimos 15 días y Futuros)"
-  )
+  st.subheader("📅 Próximos Partidos y Partidos Recientes")
   if predictions_path.exists():
+    # Para evitar cargar un desastre de memoria si el csv es gigantesco, leemos o limitamos
     df = pd.read_csv(predictions_path)
 
     if "date" in df.columns:
-      # Convertir la columna date a formato fecha de pandas para poder comparar
+      # Asegurar conversión correcta de fechas
       df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
 
-      # Definir el límite de hace 15 días respecto a hoy
-      hace_15_dias = pd.Timestamp.now() - timedelta(days=15)
-
-      # Filtrar: partidos cuya fecha sea mayor o igual a hace 15 días (incluye pasados recientes y futuros)
-      df_futuros = df[df["date_parsed"] >= hace_15_dias].copy()
-
-      # Limpiar la columna auxiliar temporal de fecha analizada para que no se muestre fea en la tabla
-      df_futuros = df_futuros.drop(columns=["date_parsed"])
-
-      # Ordenar por fecha
-      df_futuros = df_futuros.sort_values("date")
-    else:
-      # Si no hay columna date, usamos una alternativa segura
-      df_futuros = df.tail(50)
-
-    if df_futuros.empty:
-      st.info(
-          "ℹ️ No hay partidos en el rango de los últimos 15 días o futuros."
+      # Selector en pantalla para que tú elijas qué ver exactamente y no sature la web
+      filtro_tiempo = st.selectbox(
+          "Filtrar período:",
+          [
+              "Próximos y últimos 15 días",
+              "Solo Próximos (Futuros)",
+              "Solo últimos 7 días",
+              "Ver últimos 100 partidos del registro",
+          ],
+          index=0,
       )
+
+      hoy = pd.Timestamp.now()
+
+      if filtro_tiempo == "Próximos y últimos 15 días":
+        hace_15_dias = hoy - timedelta(days=15)
+        df_futuros = df[df["date_parsed"] >= hace_15_dias]
+      elif filtro_tiempo == "Solo Próximos (Futuros)":
+        df_futuros = df[df["date_parsed"] >= hoy]
+      elif filtro_tiempo == "Solo últimos 7 días":
+        hace_7_dias = hoy - timedelta(days=7)
+        df_futuros = df[
+            (df["date_parsed"] >= hace_7_dias) & (df["date_parsed"] <= hoy)
+        ]
+      else:
+        df_futuros = df.tail(100)
+
+      if "date_parsed" in df_futuros.columns:
+        df_futuros = df_futuros.drop(columns=["date_parsed"])
+
+      if not df_futuros.empty and "date" in df_futuros.columns:
+        try:
+          df_futuros = df_futuros.sort_values("date")
+        except Exception:
+          pass
     else:
-      st.dataframe(df_futuros, use_container_width=True)
+      df_futuros = df.tail(100)
+
+    st.write(f"Mostrando {len(df_futuros)} partidos filtrados:")
+    st.dataframe(df_futuros, use_container_width=True)
   else:
     st.warning("No se encontraron archivos de predicciones procesados.")
 
