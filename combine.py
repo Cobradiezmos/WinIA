@@ -13,8 +13,15 @@ def main():
             x=pd.read_csv(p, encoding='utf-8')
             required={'Date','HomeTeam','AwayTeam'}
             if not required.issubset(x.columns): continue
-            x['source_file']=p.name
-            x['league']=p.name.split('_')[0]
+           x['source_file']=p.name
+            
+            # --- SOLUCIÓN PARA LOS FIXTURES ---
+            if p.name == 'fixtures.csv' and 'Div' in x.columns:
+                x['league'] = x['Div'].astype(str).str.strip()
+            else:
+                x['league'] = p.name.split('_')[0]
+            # ----------------------------------
+            
             x['season']=p.stem.split('_')[-1]
             x['date']=pd.to_datetime(x['Date'], dayfirst=True, errors='coerce')
             x['home_team']=x['HomeTeam'].astype(str).str.strip()
