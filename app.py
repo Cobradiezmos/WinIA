@@ -91,15 +91,21 @@ with tab2:
   if predictions_path.exists():
     df = pd.read_csv(predictions_path)
 
+    # Lógica flexible para mostrar partidos futuros o el final del archivo si no hay nulos
+    df_futuros = pd.DataFrame()
     if "result" in df.columns:
       df_futuros = df[df["result"].isna() | (df["result"] == "")]
-    elif "home_goals" in df.columns:
-      df_futuros = df[df["home_goals"].isna()]
-    else:
-      df_futuros = df
+    
+    # Si el filtro anterior se queda vacío (porque ya tienen resultados o nombres distintos), mostramos las últimas filas
+    if df_futuros.empty:
+      st.info("ℹ️ No se han encontrado partidos pendientes estrictos; mostrando las últimas predicciones registradas:")
+      df_futuros = df.tail(50)
 
     if not df_futuros.empty and "date" in df_futuros.columns:
-      df_futuros = df_futuros.sort_values("date")
+      try:
+        df_futuros = df_futuros.sort_values("date")
+      except Exception:
+        pass
 
     st.dataframe(df_futuros, use_container_width=True)
   else:
