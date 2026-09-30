@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
+import os
 from pathlib import Path
 import pandas as pd
+import requests
 import streamlit as st
 
 st.set_page_config(
@@ -10,7 +12,6 @@ st.set_page_config(
 
 # Función específica para limpiar "fixtures.csv" en partidos nuevos
 def limpiar_fixtures_nuevos(df):
-  # Buscar posibles nombres de columnas de liga
   league_cols = [
       c
       for c in [
@@ -26,30 +27,57 @@ def limpiar_fixtures_nuevos(df):
   ]
 
   for col in df.columns:
-    # Si la celda contiene "fixtures.csv", buscamos con qué reemplazarla
     mask = df[col].astype(str).str.lower().str.contains("fixtures.csv", na=False)
     if mask.any():
-      # Intentar usar una columna de liga real si existe
       reemplazado = False
       for l_col in league_cols:
         if l_col != col:
           df.loc[mask, col] = df[l_col]
           reemplazado = True
           break
-      # Si no hay otra columna de liga, ponemos un nombre limpio genérico para partidos nuevos
       if not reemplazado:
         df.loc[mask, col] = "Próxima Jornada"
   return df
 
 
 # ==========================================
-# BARRA LATERAL (SIDEBAR) - GESTIÓN DE BANK
+# BARRA LATERAL (SIDEBAR) - GESTIÓN Y ACCIONES
 # ==========================================
 st.sidebar.title("⚙️ Panel de Control")
 st.sidebar.markdown(
-    "💡 *Para actualizar datos y modelos, ejecuta el flujo en la pestaña Actions"
-    " de GitHub.*"
+    "💡 *Los flujos pesados se ejecutan en segundo plano mediante GitHub"
+    " Actions.*"
 )
+
+# Botón de actualización remota vía GitHub Actions
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔄 Sincronización Remota")
+github_token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
+# REEMPLAZA "tu-usuario/tu-repositorio" por tu usuario y repo real de GitHub
+repo_name = "tu-usuario/tu-repositorio"
+
+if st.sidebar.button("🚀 Actualizar Datos (GitHub)"):
+  if not github_token:
+    st.sidebar.error("⚠️ Configura el GITHUB_TOKEN en los secretos de Streamlit.")
+  else:
+    url = f"https://api.github.com/repos/{repo_name}/actions/workflows/main.yml/dispatches"
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+    }
+    data = {"ref": "main"}
+    try:
+      response = requests.post(url, headers=headers, json=data)
+      if response.status_code == 204:
+        st.sidebar.success(
+            "✅ ¡Orden enviada! GitHub Actions está actualizando los datos."
+        )
+      else:
+        st.sidebar.error(
+            f"❌ Error al conectar con GitHub: {response.status_code}"
+        )
+    except Exception as e:
+      st.sidebar.error(f"❌ Error de red: {e}")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Gestión de Bankroll")
@@ -86,37 +114,41 @@ tab1, tab2, tab3 = st.tabs(
 )
 
 with tab1:
-  st.subheader("Oportunidades de Valor Detectadas")
+  st.subheader("Oportunidades de Valor Detectadas (Estrategia Low-Risk)")
   if candidates_path.exists():
     df_val = pd.read_csv(candidates_path)
     df_val = limpiar_fixtures_nuevos(df_val)
 
     if not df_val.empty:
-      # Filtros de la barra lateral o de la propia pestaña
+      # Filtros para acotar riesgo (Edge y Cuota Máxima)
       col_f1, col_f2 = st.columns(2)
       with col_f1:
         min_edge = st.slider(
             "Edge mínimo (%)", 0.0, 0.15, 0.025, 0.005, key="edge_slider"
         )
+
       with col_f2:
-        # Detectar si hay columna de cuota para poner el filtro
         odd_col = next(
             (c for c in ["odd", "odds", "cuota", "price"] if c in df_val.columns),
             None,
         )
         if odd_col:
           max_cuota = st.slider(
-              "Cuota máxima",
-              float(df_val[odd_col].min()),
-              float(min(20.0, df_val[odd_col].max())),
-              3.0,
+              "Cuota máxima (Control de riesgo)",
+              float(df_val[odd_col].min())
+              if not df_val[odd_col].empty
+              else 1.0,
+              float(min(20.0, df_val[odd_col].max()))
+              if not df_val[odd_col].empty
+              else 10.0,
+              2.5,
               0.1,
               key="max_odd_slider",
           )
         else:
           max_cuota = None
 
-      # Aplicar filtros
+      # Aplicación de filtros
       df_filtered = df_val[df_val["edge"] >= min_edge].copy()
       if odd_col and max_cuota:
         df_filtered = df_filtered[df_filtered[odd_col] <= max_cuota]
