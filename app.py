@@ -8,21 +8,33 @@ st.set_page_config(
 )
 
 
-# Función para reemplazar "fixture" por el nombre de la liga de forma automática
+# Función definitiva para limpiar "fixtures.csv", "fixture", etc.
 def limpiar_fixture(df):
+  # Buscar qué columna contiene el nombre de la liga
   league_col = next(
       (
           c
-          for c in ["league", "division", "div", "competition", "competicion"]
+          for c in [
+              "league",
+              "division",
+              "div",
+              "competition",
+              "competicion",
+              "League",
+              "Division",
+          ]
           if c in df.columns
       ),
       None,
   )
   if league_col:
     for col in df.columns:
-      mask = df[col].astype(str).str.lower() == "fixture"
-      if mask.any():
-        df.loc[mask, col] = df[league_col]
+      if col != league_col:
+        # Convertir a texto y buscar si contiene la palabra "fixture" o "fixtures.csv" (sin importar mayúsculas)
+        serie_limpia = df[col].astype(str).str.lower()
+        mask = serie_limpia.str.contains("fixture", na=False)
+        if mask.any():
+          df.loc[mask, col] = df[league_col]
   return df
 
 
@@ -73,9 +85,7 @@ with tab1:
   st.subheader("Oportunidades de Valor Detectadas")
   if candidates_path.exists():
     df_val = pd.read_csv(candidates_path)
-    df_val = limpiar_fixture(
-        df_val
-    )  # Limpia "fixture" usando la columna de liga
+    df_val = limpiar_fixture(df_val)
 
     if not df_val.empty:
       min_edge = st.slider(
@@ -114,7 +124,7 @@ with tab2:
   st.subheader("📅 Próximos Partidos y Predicciones del Modelo")
   if predictions_path.exists():
     df = pd.read_csv(predictions_path)
-    df = limpiar_fixture(df)  # Limpia "fixture" usando la columna de liga
+    df = limpiar_fixture(df)
 
     if "date" in df.columns:
       df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
