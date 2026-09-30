@@ -152,59 +152,59 @@ def compute_poisson_features(df, shrink=0.25):
 # 2. ENSEMBLE Y CALIBRACIÓN DE MODELOS
 # ==========================================
 def prepare_features(df):
-    """Prepara la matriz X de variables predictoras para ML."""
-    feature_cols = [
-        "elo_diff_pre",
-        "elo_prob_home",
-        "home_gf_5",
-        "home_ga_5",
-        "away_gf_5",
-        "away_ga_5",
-        "home_ppg_5",
-        "away_ppg_5",
-        "form_diff_5",
-        "goal_diff_form_5",
-        "rest_diff",
-        "experience_diff",
-        "lambda_home",
-        "lambda_away",
-        "p_poisson_home",
-        "p_poisson_draw",
-        "p_poisson_away",
-    ]
+  """Prepara la matriz X de variables predictoras para ML de forma robusta
 
-    existing_cols = [c for c in feature_cols if c in df.columns]
-    X = df[existing_cols].copy()
-    X = X.fillna(X.median())
-    return X, existing_cols
+  para evitar valores constantes en partidos futuros.
+  """
+  feature_cols = [
+      "elo_diff_pre",
+      "elo_prob_home",
+      "home_gf_5",
+      "home_ga_5",
+      "away_gf_5",
+      "away_ga_5",
+      "home_ppg_5",
+      "away_ppg_5",
+      "form_diff_5",
+      "goal_diff_form_5",
+      "rest_diff",
+      "experience_diff",
+      "lambda_home",
+      "lambda_away",
+      "p_poisson_home",
+      "p_poisson_draw",
+      "p_poisson_away",
+  ]
 
+  existing_cols = [c for c in feature_cols if c in df.columns]
+  X = df[existing_cols].copy()
 
-def map_target(result):
-    if result == "H":
-        return 0
-    if result == "D":
-        return 1
-    if result == "A":
-        return 2
-    return np.nan
+  # En lugar de una mediana global que clona las filas futuras,
+  # rellenamos de forma inteligente con valores neutros lógicos de fútbol:
+  # - Diferencias de Elo / forma a 0 (empate técnico de partida)
+  # - Goles esperados a la media histórica estándar (ej. 1.25)
+  fill_values = {
+      "elo_diff_pre": 0.0,
+      "elo_prob_home": 0.5,
+      "home_gf_5": 1.25,
+      "home_ga_5": 1.25,
+      "away_gf_5": 1.25,
+      "away_ga_5": 1.25,
+      "home_ppg_5": 1.35,
+      "away_ppg_5": 1.10,
+      "form_diff_5": 0.0,
+      "goal_diff_form_5": 0.0,
+      "rest_diff": 0.0,
+      "experience_diff": 0.0,
+  }
 
+  for col, val in fill_values.items():
+    if col in X.columns:
+      X[col] = X[col].fillna(val)
 
-def optimize_weights(P_list, y_true):
-    """Optimización de ponderación del Ensemble minimizando Log Loss."""
-    n_models = len(P_list)
-
-    def loss(weights):
-        weights = weights / np.sum(weights)
-        P_ens = sum(w * P for w, P in zip(weights, P_list))
-        P_ens = np.clip(P_ens, 1e-5, 1 - 1e-5)
-        one_hot = np.eye(3)[y_true]
-        return -np.mean(np.sum(one_hot * np.log(P_ens), axis=1))
-
-    init_weights = np.ones(n_models) / n_models
-    bounds = [(0, 1)] * n_models
-    res = minimize(loss, init_weights, bounds=bounds, method="SLSQP")
-    final_w = res.x / np.sum(res.x)
-    return final_w
+  # Cualquier otra columna numérica restante se puede rellenar con su mediana específica
+  X = X.fillna(X.median())
+  return X, existing_cols
 
 
 def calibrate_probabilities(P, T=1.0):
