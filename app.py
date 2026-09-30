@@ -8,37 +8,37 @@ st.set_page_config(
 )
 
 
-# Función radical para eliminar "fixtures.csv" de las celdas
-def limpiar_fixture(df):
-  # Buscar si hay alguna columna de liga disponible
-  league_col = next(
-      (
-          c
-          for c in [
-              "league",
-              "division",
-              "div",
-              "competition",
-              "competicion",
-              "League",
-              "Division",
-          ]
-          if c in df.columns
-      ),
-      None,
-  )
+# Función específica para limpiar "fixtures.csv" en partidos nuevos
+def limpiar_fixtures_nuevos(df):
+  # Buscar posibles nombres de columnas de liga
+  league_cols = [
+      c
+      for c in [
+          "league",
+          "division",
+          "div",
+          "competition",
+          "competicion",
+          "League",
+          "Division",
+      ]
+      if c in df.columns
+  ]
 
   for col in df.columns:
-    if col != league_col:
-      serie_limpia = df[col].astype(str).str.lower()
-      mask = serie_limpia.str.contains("fixtures.csv", na=False)
-      if mask.any():
-        if league_col:
-          # Si tenemos columna de liga, ponemos la liga
-          df.loc[mask, col] = df[league_col]
-        else:
-          # Si no hay columna de liga, ponemos un texto limpio genérico
-          df.loc[mask, col] = "Partido de Liga"
+    # Si la celda contiene "fixtures.csv", buscamos con qué reemplazarla
+    mask = df[col].astype(str).str.lower().str.contains("fixtures.csv", na=False)
+    if mask.any():
+      # Intentar usar una columna de liga real si existe
+      reemplazado = False
+      for l_col in league_cols:
+        if l_col != col:
+          df.loc[mask, col] = df[l_col]
+          reemplazado = True
+          break
+      # Si no hay otra columna de liga, ponemos un nombre limpio genérico para partidos nuevos
+      if not reemplazado:
+        df.loc[mask, col] = "Próxima Jornada"
   return df
 
 
@@ -89,7 +89,7 @@ with tab1:
   st.subheader("Oportunidades de Valor Detectadas")
   if candidates_path.exists():
     df_val = pd.read_csv(candidates_path)
-    df_val = limpiar_fixture(df_val)
+    df_val = limpiar_fixtures_nuevos(df_val)
 
     if not df_val.empty:
       min_edge = st.slider(
@@ -128,7 +128,7 @@ with tab2:
   st.subheader("📅 Próximos Partidos y Predicciones del Modelo")
   if predictions_path.exists():
     df = pd.read_csv(predictions_path)
-    df = limpiar_fixture(df)
+    df = limpiar_fixtures_nuevos(df)
 
     if "date" in df.columns:
       df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
