@@ -60,7 +60,7 @@ if st.sidebar.button("🚀 Actualizar Datos (GitHub)"):
   if not github_token:
     st.sidebar.error("⚠️ Configura el GITHUB_TOKEN en los secretos de Streamlit.")
   else:
-    url = f"https://api.github.com/repos/{repo_name}/actions/workflows/main.yml/dispatches"
+    url = f"https://api.github.com/repos/{repo_name}/actions/workflows/daily-update.yml/dispatches"
     headers = {
         "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github+json",
