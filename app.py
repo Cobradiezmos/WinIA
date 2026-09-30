@@ -92,10 +92,34 @@ with tab1:
     df_val = limpiar_fixtures_nuevos(df_val)
 
     if not df_val.empty:
-      min_edge = st.slider(
-          "Edge mínimo (%)", 0.0, 0.15, 0.025, 0.005, key="edge_slider"
-      )
+      # Filtros de la barra lateral o de la propia pestaña
+      col_f1, col_f2 = st.columns(2)
+      with col_f1:
+        min_edge = st.slider(
+            "Edge mínimo (%)", 0.0, 0.15, 0.025, 0.005, key="edge_slider"
+        )
+      with col_f2:
+        # Detectar si hay columna de cuota para poner el filtro
+        odd_col = next(
+            (c for c in ["odd", "odds", "cuota", "price"] if c in df_val.columns),
+            None,
+        )
+        if odd_col:
+          max_cuota = st.slider(
+              "Cuota máxima",
+              float(df_val[odd_col].min()),
+              float(min(20.0, df_val[odd_col].max())),
+              2.5,
+              0.1,
+              key="max_odd_slider",
+          )
+        else:
+          max_cuota = None
+
+      # Aplicar filtros
       df_filtered = df_val[df_val["edge"] >= min_edge].copy()
+      if odd_col and max_cuota:
+        df_filtered = df_filtered[df_filtered[odd_col] <= max_cuota]
 
       if "stake" in df_filtered.columns:
         df_filtered["stake_ (€)"] = (
