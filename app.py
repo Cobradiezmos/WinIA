@@ -7,6 +7,25 @@ st.set_page_config(
     page_title="WinIA - Value Betting Dashboard", page_icon="⚽", layout="wide"
 )
 
+
+# Función para reemplazar "fixture" por el nombre de la liga de forma automática
+def limpiar_fixture(df):
+  league_col = next(
+      (
+          c
+          for c in ["league", "division", "div", "competition", "competicion"]
+          if c in df.columns
+      ),
+      None,
+  )
+  if league_col:
+    for col in df.columns:
+      mask = df[col].astype(str).str.lower() == "fixture"
+      if mask.any():
+        df.loc[mask, col] = df[league_col]
+  return df
+
+
 # ==========================================
 # BARRA LATERAL (SIDEBAR) - GESTIÓN DE BANK
 # ==========================================
@@ -54,6 +73,10 @@ with tab1:
   st.subheader("Oportunidades de Valor Detectadas")
   if candidates_path.exists():
     df_val = pd.read_csv(candidates_path)
+    df_val = limpiar_fixture(
+        df_val
+    )  # Limpia "fixture" usando la columna de liga
+
     if not df_val.empty:
       min_edge = st.slider(
           "Edge mínimo (%)", 0.0, 0.15, 0.025, 0.005, key="edge_slider"
@@ -88,16 +111,14 @@ with tab1:
     )
 
 with tab2:
-  st.subheader("📅 Próximos Partidos y Partidos Recientes")
+  st.subheader("📅 Próximos Partidos y Predicciones del Modelo")
   if predictions_path.exists():
-    # Para evitar cargar un desastre de memoria si el csv es gigantesco, leemos o limitamos
     df = pd.read_csv(predictions_path)
+    df = limpiar_fixture(df)  # Limpia "fixture" usando la columna de liga
 
     if "date" in df.columns:
-      # Asegurar conversión correcta de fechas
       df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
 
-      # Selector en pantalla para que tú elijas qué ver exactamente y no sature la web
       filtro_tiempo = st.selectbox(
           "Filtrar período:",
           [
@@ -107,6 +128,7 @@ with tab2:
               "Ver últimos 100 partidos del registro",
           ],
           index=0,
+          key="selectbox_tab2",
       )
 
       hoy = pd.Timestamp.now()
@@ -135,7 +157,7 @@ with tab2:
     else:
       df_futuros = df.tail(100)
 
-    st.write(f"Mostrando {len(df_futuros)} partidos filtrados:")
+    st.write(f"Mostrando {len(df_futuros)} partidos:")
     st.dataframe(df_futuros, use_container_width=True)
   else:
     st.warning("No se encontraron archivos de predicciones procesados.")
