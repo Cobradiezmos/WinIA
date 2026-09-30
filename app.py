@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -87,27 +88,37 @@ with tab1:
     )
 
 with tab2:
-  st.subheader("Próximos Partidos y Predicciones del Modelo")
+  st.subheader(
+      "Próximos Partidos y Partidos Recientes (Últimos 15 días y Futuros)"
+  )
   if predictions_path.exists():
     df = pd.read_csv(predictions_path)
 
-    # Lógica flexible para mostrar partidos futuros o el final del archivo si no hay nulos
-    df_futuros = pd.DataFrame()
-    if "result" in df.columns:
-      df_futuros = df[df["result"].isna() | (df["result"] == "")]
-    
-    # Si el filtro anterior se queda vacío (porque ya tienen resultados o nombres distintos), mostramos las últimas filas
-    if df_futuros.empty:
-      st.info("ℹ️ No se han encontrado partidos pendientes estrictos; mostrando las últimas predicciones registradas:")
+    if "date" in df.columns:
+      # Convertir la columna date a formato fecha de pandas para poder comparar
+      df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
+
+      # Definir el límite de hace 15 días respecto a hoy
+      hace_15_dias = pd.Timestamp.now() - timedelta(days=15)
+
+      # Filtrar: partidos cuya fecha sea mayor o igual a hace 15 días (incluye pasados recientes y futuros)
+      df_futuros = df[df["date_parsed"] >= hace_15_dias].copy()
+
+      # Limpiar la columna auxiliar temporal de fecha analizada para que no se muestre fea en la tabla
+      df_futuros = df_futuros.drop(columns=["date_parsed"])
+
+      # Ordenar por fecha
+      df_futuros = df_futuros.sort_values("date")
+    else:
+      # Si no hay columna date, usamos una alternativa segura
       df_futuros = df.tail(50)
 
-    if not df_futuros.empty and "date" in df_futuros.columns:
-      try:
-        df_futuros = df_futuros.sort_values("date")
-      except Exception:
-        pass
-
-    st.dataframe(df_futuros, use_container_width=True)
+    if df_futuros.empty:
+      st.info(
+          "ℹ️ No hay partidos en el rango de los últimos 15 días o futuros."
+      )
+    else:
+      st.dataframe(df_futuros, use_container_width=True)
   else:
     st.warning("No se encontraron archivos de predicciones procesados.")
 
