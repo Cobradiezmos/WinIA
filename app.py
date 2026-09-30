@@ -109,7 +109,7 @@ with tab1:
               "Cuota máxima",
               float(df_val[odd_col].min()),
               float(min(20.0, df_val[odd_col].max())),
-              2.5,
+              3.0,
               0.1,
               key="max_odd_slider",
           )
