@@ -5,7 +5,7 @@ import pandas as pd
 
 
 def scan_value_bets(
-    df, min_edge=0.025, min_ev=0.02, kelly_fraction=0.25, max_stake=0.02
+    df, min_edge=0.025, min_ev=0.02, kelly_fraction=0.25, max_stake=0.05
 ):
   candidates = []
 
