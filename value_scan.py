@@ -10,7 +10,6 @@ def scan_value_bets(
   candidates = []
 
   # Definición de mapeo de mercados priorizando Bet365 y Promedio de Mercado (Avg)
-  # Eliminadas las columnas de cuotas máximas (Max) y Pinnacle (PS) para evitar cuotas infladas
   markets = [
       # Mercado 1X2
       ("1X2", "Home", "p_model_home", ["B365H", "AvgH", "BbAvH"]),
@@ -63,8 +62,13 @@ def scan_value_bets(
         continue
 
       prob = float(row[prob_col])
+      if prob <= 0:
+        continue
 
-      # Buscar la primera cuota válida (Bet365 primero, luego Promedio)
+      # Cuota justa teórica basada en la probabilidad del modelo
+      fair_odd = round(1.0 / prob, 2)
+
+      # Buscar la primera cuota válida de mercado
       odd = None
       for col in odd_cols:
         if col in row and pd.notna(row[col]) and float(row[col]) > 1.0:
@@ -96,7 +100,8 @@ def scan_value_bets(
             "market": m_name,
             "side": side,
             "p_model": round(prob, 4),
-            "odd": odd,
+            "fair_odd": fair_odd,  # <- NUEVA COLUMNA (Cuota justa del modelo)
+            "odd": odd,  # <- Cuota capturada del mercado
             "edge": round(edge, 4),
             "ev": round(ev, 4),
             "kelly": round(kelly_full, 4),
