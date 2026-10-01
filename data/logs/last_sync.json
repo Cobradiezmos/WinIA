@@ -1,9 +1,9 @@
 {
-  "started_at": "2026-10-01T11:06:57.720260+00:00",
+  "started_at": "2026-10-01T17:53:08.764141+00:00",
   "status": "ok",
-  "finished_at": "2026-10-01T11:12:11.038822+00:00",
+  "finished_at": "2026-10-01T17:59:48.834326+00:00",
   "matches": 122063,
   "completed": 122048,
   "upcoming": 15,
-  "value_candidates": 288847
+  "value_candidates": 288587
 }
