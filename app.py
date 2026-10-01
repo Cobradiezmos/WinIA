@@ -53,7 +53,6 @@ st.sidebar.markdown(
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔄 Sincronización Remota")
 github_token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
-# REEMPLAZA "tu-usuario/tu-repositorio" por tu usuario y repo real de GitHub
 repo_name = "Cobradiezmos/WinIA"
 
 if st.sidebar.button("🚀 Actualizar Datos (GitHub)"):
@@ -129,18 +128,26 @@ with tab1:
 
       with col_f2:
         odd_col = next(
-            (c for c in ["odd", "odds", "cuota", "price"] if c in df_val.columns),
+            (
+                c
+                for c in ["odd", "odds", "cuota", "price"]
+                if c in df_val.columns
+            ),
             None,
         )
         if odd_col:
           max_cuota = st.slider(
               "Cuota máxima (Control de riesgo)",
-              float(df_val[odd_col].min())
-              if not df_val[odd_col].empty
-              else 1.0,
-              float(min(20.0, df_val[odd_col].max()))
-              if not df_val[odd_col].empty
-              else 10.0,
+              (
+                  float(df_val[odd_col].min())
+                  if not df_val[odd_col].empty
+                  else 1.0
+              ),
+              (
+                  float(min(20.0, df_val[odd_col].max()))
+                  if not df_val[odd_col].empty
+                  else 10.0
+              ),
               2.5,
               0.1,
               key="max_odd_slider",
@@ -162,14 +169,37 @@ with tab1:
       col1.metric("Apuestas Encontradas", len(df_filtered))
       col2.metric(
           "Edge Promedio",
-          f"{(df_filtered['edge'].mean() * 100):.2f}%"
-          if not df_filtered.empty
-          else "0%",
+          (
+              f"{(df_filtered['edge'].mean() * 100):.2f}%"
+              if not df_filtered.empty
+              else "0%"
+          ),
       )
       col3.metric("Bankroll Configurado", f"{bankroll_inicial:,.2f} €")
 
+      # Reorganización explícita de columnas para asegurar que 'fair_odd' aparece junto a 'odd'
+      preferred_cols = [
+          "date",
+          "league",
+          "home_team",
+          "away_team",
+          "market",
+          "side",
+          "p_model",
+          "fair_odd",
+          "odd",
+          "edge",
+          "ev",
+          "kelly",
+          "stake",
+          "stake_ (€)",
+      ]
+      display_cols = [c for c in preferred_cols if c in df_filtered.columns] + [
+          c for c in df_filtered.columns if c not in preferred_cols
+      ]
+
       st.dataframe(
-          df_filtered.sort_values(by="edge", ascending=False),
+          df_filtered[display_cols].sort_values(by="edge", ascending=False),
           use_container_width=True,
       )
     else:
